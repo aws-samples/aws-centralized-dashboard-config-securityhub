@@ -20,7 +20,7 @@ To utilize our application, you need the following tools:
 ## Download the solution
 
 ```bash
-git clone [git@ssh.gitlab.aws.dev:cca-ambassadors/aws-centralized-dashboard-config-securityhub.git](https://github.com/aws-samples/aws-centralized-dashboard-config-securityhub)
+git clone https://github.com/aws-samples/aws-centralized-dashboard-config-securityhub.git
 ```
 
 ## How to build and deploy this application
