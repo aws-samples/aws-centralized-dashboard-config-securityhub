@@ -1,0 +1,11 @@
+version = 0.1
+[default.deploy.parameters]
+stack_name = "aws-status-check-app"
+resolve_s3 = true
+s3_prefix = "aws-status-check-app"
+region = "us-east-2"
+confirm_changeset = true
+capabilities = "CAPABILITY_NAMED_IAM"
+disable_rollback = true
+parameter_overrides = "CheckFrequencyInterval=\"rate(1 hour)\" CheckAllAccountsinOrgCondition=\"true\" MemberAccountIds=\"IGNORE,IF,CheckAllAccountsinOrg,TRUE\""
+image_repositories = []

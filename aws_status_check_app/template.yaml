@@ -1,0 +1,221 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  **WARNING** This template creates AWS Lambda functions, AWS SSM parameters, AWS EventBridge Rules and related resources. You will be billed for the AWS resources used if you create a stack from this template. This Cloudformation Template is part of a SAM Application which is deployed using AWS SAM CLI in a management account of the AWS Organization.
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: AWS Config/SecurityHub Status Checker Configuration
+        Parameters:
+          - CheckFrequencyInterval
+          - CheckAllAccountsinOrgCondition
+          - MemberAccountIds
+
+    ParameterLabels:
+      CheckFrequencyInterval:
+        default: Enter Frequency to run check
+      CheckAllAccountsinOrgCondition:
+        default: Check all accounts in the organization (true/false)
+      MemberAccountIds:
+        default: Enter a comma-delimited list of AWS Member Accounts where you need
+          to check for AWS Config status. This is conditional. Left to default, the
+          function will check all the member accounts in the organization.
+
+Parameters:
+  CheckFrequencyInterval:
+    Type: String
+    Default: rate(1 day)
+    AllowedValues:
+      - rate(1 day)
+      - rate(12 hours)
+      - rate(6 hours)
+      - rate(3 hours)
+      - rate(1 hour)
+    Description: Enter Frequency to run check
+
+  CheckAllAccountsinOrgCondition:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Check all accounts in the organization
+
+  MemberAccountIds:
+    Type: String
+    Description: A comma-delimited list of AWS Member Accounts where you need to check
+      for AWS Config status. This is conditional. Left to default, the function will
+      check all the member accounts in the organization.
+    Default: IGNORE,IF,CheckAllAccountsinOrg,TRUE
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 60
+    Runtime: python3.8
+
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  CheckAllAccountsinOrgParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /status_check_app/CheckAllAccountsinOrg
+      Type: String
+      Value: !Ref 'CheckAllAccountsinOrgCondition'
+      DataType: text
+      Description: Flag to check all accounts in org
+      Tier: Standard
+
+  ConfigAccountsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /status_check_app/AccountIds
+      Type: StringList
+      Value: !Ref 'MemberAccountIds'
+      DataType: text
+      Description: A comma-delimited list of AWS Member Accounts where you need to
+        check for AWS Config status
+      Tier: Standard
+
+  ManagerFunction:
+    DependsOn: ManagerFunctionLogGroup
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: aws_status_check
+      Handler: ManagerFunction.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt 'AppFunctionRole.Arn'
+
+  ManagerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+        RetentionInDays: 7
+
+  WorkerFunction:
+    DependsOn: WorkerFunctionLogGroup
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: aws_status_check
+      Handler: WorkerFunction.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt 'AppFunctionRole.Arn'
+
+  WorkerFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+        RetentionInDays: 7
+
+  AppFunctionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Path: /
+      PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: AllowManagerFnToCreatecustommetric
+            Effect: Allow
+            Action:
+            - ssm:GetParameter
+            - cloudwatch:PutMetricData
+            - events:PutEvents
+            - organizations:ListAccounts
+            - ec2:DescribeRegions
+            - config:DescribeConfigurationRecorderStatus
+            - config:ListConformancePackComplianceScores
+            - securityhub:GetFindings
+            Resource: "*"
+          - Sid: AllowAssumeRoleonMemberAccounts
+            Effect: Allow
+            Action: sts:AssumeRole
+            Resource: !Sub arn:${AWS::Partition}:iam::*:role/AssumedFunctionRole
+
+  AppFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AppFunctionRole
+      Path: /
+      AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      MaxSessionDuration: 3600
+      ManagedPolicyArns:
+        - !Ref 'AppFunctionPolicy'
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Description: Allows Lambda functions to call AWS services on your behalf.
+
+  AssumedFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AssumedFunctionRole
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub
+                - ${AdminAccountId}
+                - AdminAccountId: !Ref 'AWS::AccountId'
+            Action:
+              - sts:AssumeRole
+      MaxSessionDuration: 3600
+      ManagedPolicyArns:
+        - !Ref 'AppFunctionPolicy'
+      Description: Role to allow Workerfunction to assume on member account
+
+
+  ManagerFunctionScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: !Ref 'CheckFrequencyInterval'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt 'ManagerFunction.Arn'
+          Id: TargetFunctionToScheduledRun
+      EventBusName: default
+
+  PermissionForEventsToInvokeLambda1:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref 'ManagerFunction'
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt 'ManagerFunctionScheduledRule.Arn'
+
+  WorkerFunctionRule:
+    Type: AWS::Events::Rule
+    Properties:
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt 'WorkerFunction.Arn'
+          Id: TargetFunctionToRunforEveryAccount
+      EventBusName: default
+      EventPattern:
+        source:
+          - aws_status_check_app.ManagerFn
+        detail-type:
+          - aws_status_check_event
+  PermissionForEventsToInvokeLambda2:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref 'WorkerFunction'
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt 'WorkerFunctionRule.Arn'
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  ManagerFunctionARN:
+    Description: ManagerFunction ARN
+    Value: !GetAtt 'ManagerFunction.Arn'
+  WorkerFunctionARN:
+    Description: WorkerFunction ARN
+    Value: !GetAtt 'WorkerFunction.Arn'

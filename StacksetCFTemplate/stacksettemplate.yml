@@ -1,0 +1,61 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: |
+  **WARNING** This stackset template is part of the AWS Config/SecurityHub Status Checker App. It creates AWS IAM Role and Policies required to check AWS Config status on member accounts on all regions.  An AWS Lambda function running on a Management Account used by AWS Config Status checker app assumes this role to get status of AWS Config Status on the member accounts on all regions.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: AWS Config Status Checker Configuration
+        Parameters:
+          - AdministratorAccountId
+
+    ParameterLabels:
+      AdministratorAccountId:
+        default: AWS Account Id of the administrator account (the account in which
+          StackSets will be created).
+
+Parameters:
+  AdministratorAccountId:
+    Type: String
+    Description: AWS Account Id of the administrator account (the account in which
+      StackSets will be created).
+    AllowedPattern: ^\d{12}$
+
+Resources:
+  AssumedFunctionPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Path: /
+      PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: AllowWorkerFunction
+            Effect: Allow
+            Action:
+            - ec2:DescribeRegions
+            - config:DescribeConfigurationRecorderStatus
+            - config:ListConformancePackComplianceScores
+            - securityhub:GetFindings
+            Resource: "*"
+
+  AssumedFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: AssumedFunctionRole
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub
+                - arn:${AWS::Partition}:iam::${AdminAccountId}:role/AppFunctionRole
+                - AdminAccountId: !Ref 'AdministratorAccountId'
+            Action:
+              - sts:AssumeRole
+      MaxSessionDuration: 3600
+      ManagedPolicyArns:
+        - !Ref 'AssumedFunctionPolicy'
+      Description: Role to allow Workerfunction to assume on member account
